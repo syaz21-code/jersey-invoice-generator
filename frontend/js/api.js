@@ -1,4 +1,4 @@
-﻿// Adjust this URL and the invoice paths when the Spring Boot API is implemented.
+// Change this URL if the backend is hosted elsewhere.
 export const API_BASE_URL = 'http://localhost:8080/api';
 
 export async function request(path, options = {}) {
@@ -21,19 +21,10 @@ export async function request(path, options = {}) {
   return data;
 }
 
-// These paths are placeholders; no requests are made until explicitly called.
 export async function createInvoice(invoice) {
   return request('/invoices', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(invoice)
   });
-}
-
-export async function getInvoice(id) {
-  return request(`/invoices/${encodeURIComponent(id)}`);
-}
-
-export async function getInvoices() {
-  return request('/invoices');
 }

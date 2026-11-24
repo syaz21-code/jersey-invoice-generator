@@ -1,4 +1,4 @@
-import { handleInvoiceSubmission } from './invoice.js';
+import { API_BASE_URL, createInvoice } from './api.js';
 
 // =========================
 // DROPDOWN CONFIG (FULL)
@@ -169,14 +169,7 @@ function createJobCard(jobType) {
       <br>
       <div class="field">
         <label>Base Price (per pcs)</label>
-        <select class="job-base-price" aria-label="Base price per piece">
-          <option value="37">1–10 pcs (RM37)</option>
-          <option value="32">11–20 pcs (RM32)</option>
-          <option value="26">21–60 pcs (RM26)</option>
-          <option value="24">61–100 pcs (RM24)</option>
-          <option value="22">101+ pcs (RM22)</option>
-        </select>
-        <small class="package-note">Paintball package adds RM60 per piece to the selected base price.</small>
+        <p>Calculated from the quantity. The paintball package adds RM60 per piece.</p>
       </div>
 
       <h3>Size Quantity</h3>
@@ -201,13 +194,7 @@ function createJobCard(jobType) {
       <br>
       <div class="field">
         <label>Base Price (per pcs)</label>
-        <select class="job-base-price" aria-label="Base price per piece">
-          <option value="37">1–10 pcs (RM37)</option>
-          <option value="32">11–20 pcs (RM32)</option>
-          <option value="26">21–60 pcs (RM26)</option>
-          <option value="24">61–100 pcs (RM24)</option>
-          <option value="22">101+ pcs (RM22)</option>
-        </select>
+        <p>Calculated from the quantity.</p>
       </div>
 
       <!-- SIZE -->
@@ -336,9 +323,9 @@ function createSizeQuantityFields() {
 function createDesignField() {
   return `
     <select class="job-design" aria-label="Design">
-      <option value="0">Customer Provided</option>
-      <option value="0">Company Template</option>
-      <option value="50">Custom Design (+RM50)</option>
+      <option value="Customer Provided">Customer Provided</option>
+      <option value="Company Template">Company Template</option>
+      <option value="Custom Design (+RM50)">Custom Design (+RM50)</option>
     </select>
   `;
 }
@@ -386,6 +373,89 @@ addBtn?.addEventListener('click', () => {
     wrapper.remove();
   });
 });
+
+function readNumber(input, description, integer = false) {
+  const raw = input.value.trim();
+  if (input.validity.badInput) throw new Error(`Enter a valid number for ${description}.`);
+  if (!raw) return 0;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0 || (integer && !Number.isInteger(value))) {
+    throw new Error(`Enter a valid non-negative ${integer ? 'whole number' : 'amount'} for ${description}.`);
+  }
+  return value;
+}
+
+function specialRequests(container) {
+  return Array.from(container.querySelectorAll('.special-item'), item => {
+    const name = item.querySelector('.special-name').value.trim();
+    const input = item.querySelector('.special-price');
+    const price = readNumber(input, 'the special request price');
+    if (!name && !input.value.trim()) return null;
+    if (!name || !input.value.trim()) throw new Error('Enter both a name and a price for each special request.');
+    return { name, price, chargeType: item.querySelector('.special-type').value.toUpperCase() };
+  }).filter(Boolean);
+}
+
+function buildInvoiceRequest() {
+  const value = id => document.getElementById(id).value.trim();
+  const sizeKeys = ['xs', 's', 'm', 'l', 'xl', 'xl2', 'xl3', 'xl4', 'xl5', 'xl6', 'xl7'];
+  const jobs = Array.from(document.querySelectorAll('.job-item'), card => {
+    const get = selector => card.querySelector(selector)?.value.trim() || null;
+    const jobName = get('.job-name');
+    if (!jobName) throw new Error('Enter a name for each job.');
+    const sizes = Object.fromEntries(sizeKeys.map(size => [size, readNumber(card.querySelector(`.job-${size}`), `${size.toUpperCase()} quantity`, true)]));
+    if (!Object.values(sizes).some(quantity => quantity > 0)) throw new Error(`Enter at least one jersey for ${jobName}.`);
+    return {
+      jobType: card.dataset.jobType.toUpperCase(), jobName, design: get('.job-design'), sizes,
+      material: get('.job-material'), collar: get('.job-collar'), sleeve: get('.job-sleeve'),
+      nameset: get('.job-nameset'), cutting: get('.job-cutting'), piping: get('.job-piping'),
+      specialRequests: specialRequests(card.querySelector('.job-special-container'))
+    };
+  });
+  if (!value('orderDate') || !value('name') || !value('phone') || !value('address')) {
+    throw new Error('Enter the date, customer name, phone and address.');
+  }
+  if (value('email') && !document.getElementById('email').validity.valid) throw new Error('Enter a valid email address.');
+  if (!jobs.length) throw new Error('Add at least one job.');
+  const postage = document.getElementById('postage');
+  return {
+    date: value('orderDate'), postagePrice: postage.value.trim() ? readNumber(postage, 'postage') : null,
+    customer: { name: value('name'), companyName: value('companyName') || null, email: value('email') || null,
+      phone: value('phone'), address: value('address') },
+    jobs, specialRequests: specialRequests(document.getElementById('specialContainer'))
+  };
+}
+
+async function handleInvoiceSubmission() {
+  const status = document.getElementById('invoiceStatus');
+  const button = document.querySelector('.submit-btn');
+  let preview;
+  try {
+    const invoice = buildInvoiceRequest();
+    preview = window.open('', '_blank');
+    button.disabled = true;
+    status.textContent = 'Generating invoice...';
+    status.dataset.state = '';
+    const result = await createInvoice(invoice);
+    const pdfUrl = new URL(result.pdfUrl, API_BASE_URL).href;
+    document.getElementById('invoiceNumber').value = result.number;
+    status.textContent = `Invoice ${result.number} generated. Total: RM${Number(result.pricing.total).toFixed(2)}. `;
+    const link = document.createElement('a');
+    link.href = pdfUrl;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = 'Open invoice PDF';
+    status.append(link);
+    status.dataset.state = 'success';
+    if (preview) preview.location.href = pdfUrl;
+  } catch (error) {
+    if (preview) preview.close();
+    status.textContent = error.message || 'Could not generate the invoice.';
+    status.dataset.state = 'error';
+  } finally {
+    button.disabled = false;
+  }
+}
 
 document.querySelector('.submit-btn')?.addEventListener('click', handleInvoiceSubmission);
 
